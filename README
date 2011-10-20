@@ -17,6 +17,6 @@ python google_search.py
 
 As a module:
 
-from google-scholar-search import *
-searcher = GoogleScholarSearch()
-searcher.search(['breast cancer', 'gene'])
+import google_search
+searcher = google_search.GoogleScholarSearch()
+searcher.advanced_search_publication('sigir', 2009, 2011, 0, 2000)
