@@ -64,16 +64,6 @@ class GoogleScholarSearch:
                 pubJournalYear = pubJournalURL
                 pubJournalURL = ''
                                
-            # This can potentially fail if all of the abstract can be contained in the space
-            # provided such that no '...' is found
-            delimiter = soup.firstText("...")
-            if delimiter:
-                delimiter = delimiter.parent
-            pubAbstract = ""
-            while delimiter and str(delimiter)!='Null' and (str(delimiter)!='<b>...</b>' or pubAbstract==""):
-                pubAbstract += str(delimiter)
-                delimiter = delimiter.nextSibling
-                
             match = re.search("Cited by ([^<]*)", str(record))
             pubCitation = ''
             if match != None:
@@ -85,7 +75,6 @@ class GoogleScholarSearch:
                     "Authors": pubAuthors,
                     "JournalYear": pubJournalYear,
                     "JournalURL": pubJournalURL,
-                    "Abstract": pubAbstract,
                     "NumCited": pubCitation,
                     })
         return results
@@ -145,46 +134,104 @@ class GoogleScholarSearch:
             time.sleep(3)
         return results
 
+def download_pdf(filename, download_url):
+    print "downloading... %s" % download_url
+    url = urlparse.urlparse(download_url)
+    if url.port:
+        conn = httplib.HTTPConnection(url.hostname, url.port)
+    else:
+        conn = httplib.HTTPConnection(url.hostname)
+    headers = {'User-Agent': 'Mozilla/4.0 (compatible; MSIE 5.5; Windows NT)'}
+    conn.request("GET", url.path+"?"+url.query, {}, headers)
+    resp = conn.getresponse()
+    if resp.status==200:
+        data = resp.read()
+        fpdf = open(filename, "wb")
+        fpdf.write(data)
+        fpdf.close()
+    else:
+        print "ERROR during download pdf url"
+
+ACM_EXPORTFORMATS_URL = '/exportformats.cfm'
+ACM_DOWNFORMATS_URL = '/downformats.cfm'
+ACM_EXPORTFORMATS_HOST = 'dl.acm.org'
+
+def download_acm_bib(filename, acm_url):
+    print "downloading bibtex for... %s" % acm_url
+    # http://portal.acm.org/citation.cfm?id=1572060
+    # http://portal.acm.org/citation.cfm?id=1571941.1571963
+    acm_id = re.search(r'id=([\d\.]*)',str(acm_url)).group(1)
+    if '.' in acm_id:
+        acm_id = acm_id.split('.')[-1]
+    if not acm_id:
+        print "no acm id extracted"
+        return
+    print "acm id:", acm_id
+    
+    params = urllib.urlencode({'expformat': 'bibtex', 'id': acm_id})
+    headers = {'User-Agent': 'Mozilla/4.0 (compatible; MSIE 5.5; Windows NT)'}
+    url = ACM_EXPORTFORMATS_URL+"?"+params
+    time.sleep(2)
+    conn = httplib.HTTPConnection(ACM_EXPORTFORMATS_HOST)
+    conn.request("GET", url, {}, headers)
+    resp = conn.getresponse()
+    
+    if resp.status==200:
+        html = resp.read()
+        parent_id = re.search(r'downformats.cfm\?id=[\d]*&parent_id=([\d]*)',str(html)).group(1)
+        print "parent_id: ", parent_id
+        params = urllib.urlencode({'expformat': 'bibtex', 'id': acm_id, 'parent_id': parent_id})
+        headers = {'User-Agent': 'Mozilla/4.0 (compatible; MSIE 5.5; Windows NT)'}
+        url = ACM_DOWNFORMATS_URL+"?"+params
+        
+        time.sleep(2)
+        conn = httplib.HTTPConnection(ACM_EXPORTFORMATS_HOST)
+        conn.request("GET", url, {}, headers)
+        resp = conn.getresponse()
+        
+        print "response: ", resp.status
+        if resp.status==200:
+            data = resp.read()
+            fbib = open(filename, "wb")
+            fbib.write(data)
+            fbib.close()
+            
+    else:
+        print "ERROR during download bibtex url"
+
+DOWNLOAD_DIR = 'download'
+
 if __name__ == '__main__':
     search = GoogleScholarSearch()
     pubs = search.advanced_search_publication('sigir', 2009, 2011, 0, 2000)
+    if not os.path.isdir(DOWNLOAD_DIR):
+        os.mkdir(DOWNLOAD_DIR)
     for pub in pubs:
         print pub['Title']
         print pub['Authors']
         print pub['JournalYear']
         print pub['JournalURL']
-        print pub['Abstract']
         print pub['NumCited']
         print pub['URL']
         print pub['DOWNLOAD_URL']
         
         if pub['DOWNLOAD_URL']:
-            md5hex_filename = hashlib.md5(pub['DOWNLOAD_URL']).hexdigest()[:8]
-            file_exists = os.path.isfile(md5hex_filename+".txt")
+            md5hex_filename = hashlib.md5(pub['URL']).hexdigest()[:8]
+            file_exists = os.path.isfile(os.path.join(DOWNLOAD_DIR, md5hex_filename+".txt"))
             print "md5 hex: %s" % md5hex_filename
             
             if not file_exists:
-                ftxt = open(md5hex_filename+".txt", "w")
+                ftxt = open(os.path.join(DOWNLOAD_DIR, md5hex_filename+".txt"), "w")
                 for key, item in pub.iteritems():
                     ftxt.write("%s: %s\n" % (key, item))
                 ftxt.close()
                 
-                print "downloading... %s" % pub['DOWNLOAD_URL']
-                url = urlparse.urlparse(pub['DOWNLOAD_URL'])
-                if url.port:
-                    conn = httplib.HTTPConnection(url.hostname, url.port)
-                else:
-                    conn = httplib.HTTPConnection(url.hostname)
-                headers = {'User-Agent': 'Mozilla/4.0 (compatible; MSIE 5.5; Windows NT)'}
-                conn.request("GET", url.path+"?"+url.query, {}, headers)
-                resp = conn.getresponse()
-                if resp.status==200:
-                    data = resp.read()
-                    fpdf = open(md5hex_filename+".pdf", "wb")
-                    fpdf.write(data)
-                    fpdf.close()
-                else:
-                    print "ERROR during download pdf url"
+                # try download pdf
+                download_pdf(os.path.join(DOWNLOAD_DIR, md5hex_filename+".pdf"), pub['DOWNLOAD_URL'])
+                # try download bib file
+                if 'portal.acm.org' in pub['URL']:
+                    download_acm_bib(os.path.join(DOWNLOAD_DIR, md5hex_filename+".bib"), pub['URL'])
+                
             else:
                 print "file with md5 %s already exists" % md5hex_filename
 
